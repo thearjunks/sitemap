@@ -36,3 +36,18 @@ export const monitorSettings = sqliteTable("monitor_settings", {
   alertsEnabled: integer("alerts_enabled", { mode: "boolean" }).notNull().default(true),
   updatedAt: text("updated_at").notNull(),
 });
+
+export const generalMonitoredUrls = sqliteTable("general_monitored_urls", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  url: text("url").notNull().unique(),
+  domain: text("domain").notNull(),
+  status: text("status").notNull().default("Unknown"),
+  httpCode: integer("http_code"),
+  finalUrl: text("final_url"),
+  lastCheckedAt: text("last_checked_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  index("idx_general_urls_status").on(table.status),
+  index("idx_general_urls_domain").on(table.domain),
+]);
