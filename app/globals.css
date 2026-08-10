@@ -52,6 +52,11 @@ h1 { font-size: 25px; margin: 0 0 6px; letter-spacing: -.6px; }
 .notice { background: #fff6e8; border: 1px solid #f0d5ad; color: #7a4c14; border-radius: 8px; padding: 11px 14px; font-size: 12px; margin-bottom: 17px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .notice strong { color: #5a370d; }
 .notice button { border: 0; background: transparent; color: #8e5d1e; font-weight: 800; }
+.check-progress { background: white; border: 1px solid #cfe4e1; border-radius: 9px; padding: 15px 17px; margin-bottom: 17px; box-shadow: inset 3px 0 var(--teal); }
+.check-progress-copy { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-bottom: 10px; font-size: 12px; }
+.check-progress-copy span { color: var(--teal-dark); font-weight: 800; }
+.progress-track { height: 8px; overflow: hidden; background: #e7efee; border-radius: 99px; margin-bottom: 8px; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, var(--teal), #52c8bb); border-radius: inherit; transition: width .25s ease; }
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .metric { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 16px; min-height: 102px; position: relative; overflow: hidden; }
 .metric::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--accent, var(--teal)); }

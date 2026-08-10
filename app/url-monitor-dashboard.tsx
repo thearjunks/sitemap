@@ -36,6 +36,7 @@ export function UrlMonitorDashboard() {
   const [groupInput, setGroupInput] = useState("Website");
   const [bulkInput, setBulkInput] = useState("");
   const [toast, setToast] = useState("");
+  const [checking, setChecking] = useState<{ done: number; total: number } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -56,7 +57,8 @@ export function UrlMonitorDashboard() {
   const groups = useMemo(() => Array.from(new Set(data.urls.map((item) => item.group))).sort(), [data.urls]);
   const filtered = useMemo(() => data.urls.filter((item) => {
     const text = `${item.url} ${item.label} ${item.finalUrl || ""}`.toLowerCase();
-    const matchesStatus = status === "All statuses" || item.status === status || (status === "Not Indexed" && item.indexedStatus === "Not Indexed");
+    const notActive = ["404", "410", "Server Error", "Unavailable", "Removed"].includes(item.status);
+    const matchesStatus = status === "All statuses" || item.status === status || (status === "Not active" && notActive) || (status === "Not Indexed" && item.indexedStatus === "Not Indexed");
     return text.includes(query.toLowerCase()) && matchesStatus && (group === "All groups" || item.group === group);
   }), [data.urls, query, status, group]);
 
@@ -86,8 +88,28 @@ export function UrlMonitorDashboard() {
     if (result) { setDrawer(null); setBulkInput(""); flash(`${result.added ?? 0} URLs added`); }
   };
   const checkNow = async (ids: number[] = []) => {
-    const result = await request("POST", { action: "check", ids });
-    if (result) { setSelected([]); flash(`${result.checked ?? 0} URLs checked`); }
+    if (checking) return;
+    const targetIds = ids.length ? ids : data.urls.filter((item) => item.status !== "Removed").map((item) => item.id);
+    if (!targetIds.length) return flash("No active URLs to check");
+    let done = 0;
+    setChecking({ done, total: targetIds.length });
+    try {
+      for (let start = 0; start < targetIds.length; start += 20) {
+        const response = await fetch("/api/urls", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "check", ids: targetIds.slice(start, start + 20) }) });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "A check batch failed");
+        const updates = new Map((payload.urls as UrlItem[]).map((item) => [item.id, item]));
+        setData((current) => ({ ...current, urls: current.urls.map((item) => updates.get(item.id) || item) }));
+        done += payload.checked ?? 0;
+        setChecking({ done, total: targetIds.length });
+      }
+      setSelected([]);
+      const refreshed = await fetch("/api/urls");
+      setData(await refreshed.json());
+      flash(`${done} URLs checked`);
+    } catch (error) {
+      flash(`${done} of ${targetIds.length} checked. ${error instanceof Error ? error.message : "Checking stopped"}`);
+    } finally { setChecking(null); }
   };
   const saveEdit = async () => {
     if (!active) return;
@@ -118,7 +140,7 @@ export function UrlMonitorDashboard() {
 
   return (
     <div className="app-shell">
-      {loading && <div className="loading-line" />}
+      {(loading || checking) && <div className="loading-line" />}
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">∿</span><span>URL Watch</span></div>
         <div className="nav-label">Workspace</div>
@@ -137,8 +159,10 @@ export function UrlMonitorDashboard() {
         <div className="content">
           <div className="heading-row">
             <div><h1>URL health overview</h1><p className="subhead">Monitor availability, redirects, indexing, and sitemap eligibility from one place.</p></div>
-            <div className="button-row"><button className="btn" onClick={() => setDrawer("bulk")}>⇧ Bulk import</button><button className="btn" onClick={() => checkNow()}>⟳ Check all now</button><button className="btn primary" onClick={() => setDrawer("add")}>＋ Add URL</button></div>
+            <div className="button-row"><button className="btn" disabled={Boolean(checking)} onClick={() => setDrawer("bulk")}>⇧ Bulk import</button><button className="btn" disabled={Boolean(checking)} onClick={() => checkNow()}>{checking ? `⟳ Checking ${checking.done.toLocaleString()} / ${checking.total.toLocaleString()}` : "⟳ Check all now"}</button><button className="btn primary" disabled={Boolean(checking)} onClick={() => setDrawer("add")}>＋ Add URL</button></div>
           </div>
+
+          {checking && <div className="check-progress" role="status" aria-live="polite"><div className="check-progress-copy"><strong>Checking all URLs…</strong><span>{checking.done.toLocaleString()} of {checking.total.toLocaleString()} checked</span></div><div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={checking.total} aria-valuenow={checking.done}><div className="progress-fill" style={{ width: `${Math.round((checking.done / checking.total) * 100)}%` }} /></div><div className="panel-meta">Keep this page open. Results and filters update after every batch.</div></div>}
 
           {alerts.length > 0 && <div className="notice"><span><strong>{alerts.length} active alert{alerts.length > 1 ? "s" : ""}</strong> — previously healthy pages have changed status and need review.</span><button onClick={() => { setQuery(""); setStatus("All statuses"); window.scrollTo({ top: 520, behavior: "smooth" }); }}>Review alerts →</button></div>}
           <section className="metrics" aria-label="URL monitoring summary">
@@ -148,8 +172,8 @@ export function UrlMonitorDashboard() {
           <section className="panel">
             <div className="panel-head"><div><div className="panel-title">Monitored URLs</div><div className="panel-meta">Operational registry with current status and last check</div></div><div className="button-row"><button className="btn" onClick={exportCsv}>↓ Export CSV</button><button className="btn" onClick={exportSitemap}>◇ Generate sitemap</button></div></div>
             <div className="toolbar">
-              <div className="toolbar-left"><div className="search"><input aria-label="Search URLs" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search URL, label, or destination" /></div><select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)}>{["All statuses","Live","Redirected","404","410","Server Error","Unavailable","Removed","Not Indexed"].map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Filter by group" value={group} onChange={(e) => setGroup(e.target.value)}><option>All groups</option>{groups.map((item) => <option key={item}>{item}</option>)}</select></div>
-              <div className="toolbar-right">{selected.length > 0 && <><span className="selected-bar">{selected.length} selected</span><button className="btn" onClick={() => checkNow(selected)}>⟳ Check</button><button className="btn" onClick={markRemoved}>Mark removed</button><button className="btn danger" onClick={() => deleteUrls(selected)}>Delete Selected</button></>}</div>
+              <div className="toolbar-left"><div className="search"><input aria-label="Search URLs" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search URL, label, or destination" /></div><select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)}>{["All statuses","Live","Redirected","404","410","Server Error","Unavailable","Not active","Removed","Not Indexed","Unknown"].map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Filter by group" value={group} onChange={(e) => setGroup(e.target.value)}><option>All groups</option>{groups.map((item) => <option key={item}>{item}</option>)}</select></div>
+              <div className="toolbar-right">{selected.length > 0 && <><span className="selected-bar">{selected.length} selected</span><button className="btn" disabled={Boolean(checking)} onClick={() => checkNow(selected)}>⟳ Check</button><button className="btn" disabled={Boolean(checking)} onClick={markRemoved}>Mark removed</button><button className="btn danger" disabled={Boolean(checking)} onClick={() => deleteUrls(selected)}>Delete Selected</button></>}</div>
             </div>
             <div className="table-wrap">
               <table>
@@ -160,7 +184,7 @@ export function UrlMonitorDashboard() {
                   <td>{item.group}</td><td><span className={`badge ${statusClass[item.status] || "unknown"}`}>{item.status}{item.httpCode ? ` · ${item.httpCode}` : ""}</span></td>
                   <td className="url-cell">{item.finalUrl ? <div className="url-secondary mono" title={item.finalUrl}>{item.finalUrl}</div> : <span className="panel-meta">—</span>}</td>
                   <td><span className={`badge ${statusClass[item.indexedStatus] || "unknown"}`}>{item.indexedStatus}</span>{item.googleFirstSeen && <div className="url-secondary">First seen ≈ {item.googleFirstSeen}</div>}</td>
-                  <td>{fmtTime(item.lastCheckedAt)}</td><td><div className="table-actions"><button className="mini-btn" onClick={() => checkNow([item.id])}>Check</button><button className="mini-btn" onClick={() => openHistory(item)}>History</button><button className="mini-btn" onClick={() => openEdit(item)}>Edit</button><button className="mini-btn danger" onClick={() => deleteUrls([item.id])}>Delete</button></div></td>
+                  <td>{fmtTime(item.lastCheckedAt)}</td><td><div className="table-actions"><button className="mini-btn" disabled={Boolean(checking)} onClick={() => checkNow([item.id])}>Check</button><button className="mini-btn" onClick={() => openHistory(item)}>History</button><button className="mini-btn" disabled={Boolean(checking)} onClick={() => openEdit(item)}>Edit</button><button className="mini-btn danger" disabled={Boolean(checking)} onClick={() => deleteUrls([item.id])}>Delete</button></div></td>
                 </tr>)}</tbody>
               </table>
               {!filtered.length && <div className="empty"><strong>No URLs match these filters.</strong><br />Try clearing a filter or add a new URL.</div>}

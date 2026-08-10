@@ -120,7 +120,7 @@ async function inspectUrl(rawUrl: string) {
   let response: Response | null = null;
   try {
     for (let hops = 0; hops < 6; hops++) {
-      response = await fetch(current, { method: "GET", redirect: "manual", headers: { "User-Agent": "URL-Watch/1.0" } });
+      response = await fetch(current, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(15000), headers: { "User-Agent": "URL-Watch/1.0" } });
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
         if (!location) break;
@@ -177,19 +177,27 @@ export async function POST(request: Request) {
     const ids = Array.isArray(body.ids) ? body.ids.map(Number) : [];
     const query = ids.length ? `SELECT * FROM monitored_urls WHERE id IN (${ids.map(() => "?").join(",")}) AND status != 'Removed'` : "SELECT * FROM monitored_urls WHERE status != 'Removed'";
     const rows = await env.DB.prepare(query).bind(...ids).all<UrlRow>();
-    for (const row of rows.results) {
-      const result = await inspectUrl(row.url);
-      const risky = row.status === "Live" && ["404", "410", "Server Error", "Unavailable"].includes(result.status);
-      const redirectRisk = row.status === "Live" && result.finalUrl && ["404", "410", "Server Error", "Unavailable"].includes(result.status);
-      const alert = risky || redirectRisk ? `Previously live page now ${result.status === "Unavailable" ? "is unavailable" : `returns ${result.status}`}` : null;
-      await env.DB.prepare("UPDATE monitored_urls SET status=?,http_code=?,final_url=?,last_checked_at=?,alert_message=?,updated_at=? WHERE id=?")
-        .bind(result.status, result.httpCode, result.finalUrl, now, alert, now, row.id).run();
-      if (row.status !== result.status || row.final_url !== result.finalUrl) {
-        await env.DB.prepare("INSERT INTO status_history (url_id,from_status,to_status,http_code,final_url,note,checked_at) VALUES (?,?,?,?,?,?,?)")
-          .bind(row.id, row.status, result.status, result.httpCode, result.finalUrl, alert || "Status changed", now).run();
+    for (let start = 0; start < rows.results.length; start += 10) {
+      const batch = rows.results.slice(start, start + 10);
+      const checks = await Promise.all(batch.map((row) => inspectUrl(row.url)));
+      for (let index = 0; index < batch.length; index++) {
+        const row = batch[index];
+        const result = checks[index];
+        const risky = row.status === "Live" && ["404", "410", "Server Error", "Unavailable"].includes(result.status);
+        const redirectRisk = row.status === "Live" && result.finalUrl && ["404", "410", "Server Error", "Unavailable"].includes(result.status);
+        const alert = risky || redirectRisk ? `Previously live page now ${result.status === "Unavailable" ? "is unavailable" : `returns ${result.status}`}` : null;
+        await env.DB.prepare("UPDATE monitored_urls SET status=?,http_code=?,final_url=?,last_checked_at=?,alert_message=?,updated_at=? WHERE id=?")
+          .bind(result.status, result.httpCode, result.finalUrl, now, alert, now, row.id).run();
+        if (row.status !== result.status || row.final_url !== result.finalUrl) {
+          await env.DB.prepare("INSERT INTO status_history (url_id,from_status,to_status,http_code,final_url,note,checked_at) VALUES (?,?,?,?,?,?,?)")
+            .bind(row.id, row.status, result.status, result.httpCode, result.finalUrl, alert || "Status changed", now).run();
+        }
       }
     }
-    return Response.json({ ...(await getPayload()), checked: rows.results.length });
+    const checkedRows = ids.length
+      ? await env.DB.prepare(`SELECT * FROM monitored_urls WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all<UrlRow>()
+      : await env.DB.prepare("SELECT * FROM monitored_urls WHERE status != 'Removed'").all<UrlRow>();
+    return Response.json({ urls: checkedRows.results.map(mapUrl), checked: rows.results.length });
   }
 
   if (action === "settings") {
