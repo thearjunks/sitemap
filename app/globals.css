@@ -92,6 +92,7 @@ tbody tr:hover { background: #fbfcfd; }
 .mono { font-family: var(--font-geist-mono), monospace; }
 .table-actions { display: flex; gap: 5px; }
 .mini-btn { border: 1px solid #dfe3ea; background: white; border-radius: 6px; padding: 5px 7px; font-size: 10px; color: #536077; }
+.mini-btn.danger { color: var(--red); }
 .empty { padding: 55px 20px; text-align: center; color: var(--muted); }
 .panel-foot { padding: 11px 16px; color: var(--muted); background: #fafbfc; font-size: 10px; display: flex; justify-content: space-between; }
 

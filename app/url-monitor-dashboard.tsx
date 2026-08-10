@@ -98,10 +98,10 @@ export function UrlMonitorDashboard() {
     const result = await request("PATCH", { ids: selected, status: "Removed" });
     if (result) { setSelected([]); flash("Selected URLs marked as removed"); }
   };
-  const deleteSelected = async () => {
-    if (!selected.length || !window.confirm(`Permanently delete ${selected.length} selected URL${selected.length > 1 ? "s" : ""} and their history?`)) return;
-    const result = await request("DELETE", { ids: selected });
-    if (result) { setSelected([]); flash("Selected URLs deleted"); }
+  const deleteUrls = async (ids: number[]) => {
+    if (!ids.length || !window.confirm("Are you sure you want to delete the selected URLs?")) return;
+    const result = await request("DELETE", { ids });
+    if (result) { setSelected((current) => current.filter((id) => !ids.includes(id))); flash(ids.length === 1 ? "URL deleted" : "Selected URLs deleted"); }
   };
   const exportCsv = () => {
     const rows = [["URL","Label","Group","Status","HTTP Code","Final URL","Google Index","Google First Seen","Last Checked"], ...filtered.map((item) => [item.url,item.label,item.group,item.status,item.httpCode || "",item.finalUrl || "",item.indexedStatus,item.googleFirstSeen || "",item.lastCheckedAt || ""])];
@@ -149,7 +149,7 @@ export function UrlMonitorDashboard() {
             <div className="panel-head"><div><div className="panel-title">Monitored URLs</div><div className="panel-meta">Operational registry with current status and last check</div></div><div className="button-row"><button className="btn" onClick={exportCsv}>↓ Export CSV</button><button className="btn" onClick={exportSitemap}>◇ Generate sitemap</button></div></div>
             <div className="toolbar">
               <div className="toolbar-left"><div className="search"><input aria-label="Search URLs" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search URL, label, or destination" /></div><select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)}>{["All statuses","Live","Redirected","404","410","Server Error","Unavailable","Removed","Not Indexed"].map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Filter by group" value={group} onChange={(e) => setGroup(e.target.value)}><option>All groups</option>{groups.map((item) => <option key={item}>{item}</option>)}</select></div>
-              <div className="toolbar-right">{selected.length > 0 && <><span className="selected-bar">{selected.length} selected</span><button className="btn" onClick={() => checkNow(selected)}>⟳ Check</button><button className="btn" onClick={markRemoved}>Mark removed</button><button className="btn danger" onClick={deleteSelected}>Delete</button></>}</div>
+              <div className="toolbar-right">{selected.length > 0 && <><span className="selected-bar">{selected.length} selected</span><button className="btn" onClick={() => checkNow(selected)}>⟳ Check</button><button className="btn" onClick={markRemoved}>Mark removed</button><button className="btn danger" onClick={() => deleteUrls(selected)}>Delete Selected</button></>}</div>
             </div>
             <div className="table-wrap">
               <table>
@@ -160,7 +160,7 @@ export function UrlMonitorDashboard() {
                   <td>{item.group}</td><td><span className={`badge ${statusClass[item.status] || "unknown"}`}>{item.status}{item.httpCode ? ` · ${item.httpCode}` : ""}</span></td>
                   <td className="url-cell">{item.finalUrl ? <div className="url-secondary mono" title={item.finalUrl}>{item.finalUrl}</div> : <span className="panel-meta">—</span>}</td>
                   <td><span className={`badge ${statusClass[item.indexedStatus] || "unknown"}`}>{item.indexedStatus}</span>{item.googleFirstSeen && <div className="url-secondary">First seen ≈ {item.googleFirstSeen}</div>}</td>
-                  <td>{fmtTime(item.lastCheckedAt)}</td><td><div className="table-actions"><button className="mini-btn" onClick={() => checkNow([item.id])}>Check</button><button className="mini-btn" onClick={() => openHistory(item)}>History</button><button className="mini-btn" onClick={() => openEdit(item)}>Edit</button></div></td>
+                  <td>{fmtTime(item.lastCheckedAt)}</td><td><div className="table-actions"><button className="mini-btn" onClick={() => checkNow([item.id])}>Check</button><button className="mini-btn" onClick={() => openHistory(item)}>History</button><button className="mini-btn" onClick={() => openEdit(item)}>Edit</button><button className="mini-btn danger" onClick={() => deleteUrls([item.id])}>Delete</button></div></td>
                 </tr>)}</tbody>
               </table>
               {!filtered.length && <div className="empty"><strong>No URLs match these filters.</strong><br />Try clearing a filter or add a new URL.</div>}
