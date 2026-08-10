@@ -28,37 +28,61 @@ const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS idx_status_history_url_checked ON status_history(url_id, checked_at)`,
 ];
 
+const STC_SITEMAP_URL = "https://www.stc.com.kw/sitemap.xml";
+
+function isStcUrl(value: string) {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "stc.com.kw" || host.endsWith(".stc.com.kw");
+  } catch { return false; }
+}
+
+function stcGroup(value: string) {
+  const url = new URL(value);
+  if (/^\/en(?:\/|$)/i.test(url.pathname)) return "English";
+  if (/^\/ar(?:\/|$)/i.test(url.pathname)) return "Arabic";
+  return "STC Other";
+}
+
+async function importStcSitemap(clearExisting: boolean) {
+  const response = await fetch(STC_SITEMAP_URL, { headers: { "User-Agent": "URL-Watch/1.0" } });
+  if (!response.ok) throw new Error(`STC sitemap returned HTTP ${response.status}`);
+  const xml = await response.text();
+  const urls = [...xml.matchAll(/<loc\b[^>]*>([\s\S]*?)<\/loc>/gi)]
+    .map((match) => match[1].trim().replaceAll("&amp;", "&"))
+    .filter(isStcUrl);
+  const uniqueUrls = [...new Set(urls)];
+  if (!uniqueUrls.length) throw new Error("The STC sitemap contained no valid STC URLs");
+
+  if (clearExisting) {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM status_history"),
+      env.DB.prepare("DELETE FROM monitored_urls"),
+    ]);
+  }
+
+  const now = new Date().toISOString();
+  const insert = env.DB.prepare(
+    "INSERT OR IGNORE INTO monitored_urls (url,label,group_name,status,indexed_status,created_at,updated_at) VALUES (?,'',?,'Unknown','Unknown',?,?)"
+  );
+  for (let start = 0; start < uniqueUrls.length; start += 100) {
+    await env.DB.batch(uniqueUrls.slice(start, start + 100).map((url) => insert.bind(url, stcGroup(url), now, now)));
+  }
+  await env.DB.prepare("INSERT OR IGNORE INTO monitor_settings (id,schedule,alerts_enabled,updated_at) VALUES (1,?,?,?)")
+    .bind("Every 6 hours", 1, now).run();
+}
+
 async function ensureDb() {
   await env.DB.batch(schemaStatements.map((sql) => env.DB.prepare(sql)));
-  const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM monitored_urls").first<{ count: number }>();
-  if (!count?.count) {
-    const now = new Date();
-    const iso = (hoursAgo: number) => new Date(now.getTime() - hoursAgo * 3600000).toISOString();
-    const seeds = [
-      ["https://www.example.com/", "Homepage", "Corporate", "Live", 200, null, "Indexed", "2018-04", iso(0.2), null],
-      ["https://www.example.com/products", "Products", "Corporate", "Live", 200, null, "Indexed", "2020-09", iso(0.4), null],
-      ["https://www.example.com/old-offers", "Old offers", "Campaigns", "Redirected", 301, "https://www.example.com/offers", "Indexed", "2021-02", iso(0.7), null],
-      ["https://www.example.com/summer-2024", "Summer campaign", "Campaigns", "404", 404, null, "Not Indexed", "2024-05", iso(1.1), "Previously live page now returns 404"],
-      ["https://www.example.com/support", "Support", "Help center", "Live", 200, null, "Indexed", "2019-11", iso(1.3), null],
-      ["https://www.example.com/legacy-api", "Legacy API", "Technical", "410", 410, null, "Not Indexed", "2020-01", iso(2.2), null],
-      ["https://www.example.com/account", "Customer account", "Corporate", "Server Error", 503, null, "Unknown", null, iso(2.8), "Previously live page now returns a server error"],
-      ["https://status.example.com/", "Service status", "Technical", "Live", 200, null, "Indexed", "2022-03", iso(4.3), null],
-      ["https://www.example.com/discontinued", "Discontinued service", "Archive", "Removed", null, null, "Not Indexed", "2019-06", iso(26), null],
-      ["https://www.example.com/contact", "Contact us", "Corporate", "Live", 200, null, "Indexed", "2018-04", iso(5.1), null],
-      ["https://www.example.com/partners", "Partners", "Corporate", "Unavailable", null, null, "Unknown", null, iso(6), "Previously live page is unavailable"],
-      ["https://www.example.com/new-launch", "New launch", "Campaigns", "Live", 200, null, "Not Indexed", null, iso(7), null],
-    ];
-    const insert = `INSERT INTO monitored_urls
-      (url,label,group_name,status,http_code,final_url,indexed_status,google_first_seen,last_checked_at,alert_message,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`;
-    await env.DB.batch(seeds.map((s, index) => env.DB.prepare(insert).bind(...s, iso(72 + index), iso(0.2))));
-    await env.DB.prepare("INSERT OR IGNORE INTO monitor_settings (id,schedule,alerts_enabled,updated_at) VALUES (1,?,?,?)")
-      .bind("Every 6 hours", 1, now.toISOString()).run();
-    const rows = await env.DB.prepare("SELECT id,status,http_code,final_url,created_at FROM monitored_urls").all<UrlRow>();
-    await env.DB.batch(rows.results.map((row) => env.DB.prepare(
-      "INSERT INTO status_history (url_id,from_status,to_status,http_code,final_url,note,checked_at) VALUES (?,NULL,?,?,?,?,?)"
-    ).bind(row.id, row.status, row.http_code, row.final_url, "Added to monitoring", row.created_at)));
-  }
+  await env.DB.batch([
+    env.DB.prepare("UPDATE monitored_urls SET group_name='English' WHERE url LIKE '%stc.com.kw/en/%' OR url LIKE '%stc.com.kw/en'"),
+    env.DB.prepare("UPDATE monitored_urls SET group_name='Arabic' WHERE url LIKE '%stc.com.kw/ar/%' OR url LIKE '%stc.com.kw/ar'"),
+  ]);
+  const [count, dummy] = await Promise.all([
+    env.DB.prepare("SELECT COUNT(*) AS count FROM monitored_urls").first<{ count: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM monitored_urls WHERE url LIKE '%example.com%'").first<{ count: number }>(),
+  ]);
+  if (!count?.count || dummy?.count) await importStcSitemap(Boolean(dummy?.count));
 }
 
 function mapUrl(row: UrlRow) {
@@ -136,7 +160,7 @@ export async function POST(request: Request) {
     for (const item of entries) {
       const data = typeof item === "string" ? { url: item } : item as Record<string, unknown>;
       const url = normalizeUrl(String(data.url || ""));
-      if (!url) continue;
+      if (!url || !isStcUrl(url)) continue;
       const result = await env.DB.prepare(
         "INSERT OR IGNORE INTO monitored_urls (url,label,group_name,status,indexed_status,created_at,updated_at) VALUES (?,?,?,'Unknown','Unknown',?,?)"
       ).bind(url, String(data.label || ""), String(data.group || "Website"), now, now).run();
