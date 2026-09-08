@@ -1,0 +1,22 @@
+"use client";
+
+import { FormEvent, useEffect, useState } from "react";
+import { DashboardSidebar } from "../../dashboard-sidebar";
+
+type User = { id: number; username: string; displayName: string; role: "admin" | "user"; createdAt: string };
+export default function UsersPage() {
+  const [users, setUsers] = useState<User[]>([]);
+  const [username, setUsername] = useState(""); const [displayName, setDisplayName] = useState(""); const [password, setPassword] = useState(""); const [role, setRole] = useState<"admin" | "user">("user"); const [message, setMessage] = useState("");
+  const load = async () => { const response = await fetch("/api/users"); const data = await response.json(); if (response.ok) setUsers(data.users); else setMessage(data.error); };
+  useEffect(() => { void load(); }, []);
+  const request = async (method: string, body: object) => { setMessage(""); const response = await fetch("/api/users", { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const data = await response.json(); if (!response.ok) return setMessage(data.error); setUsers(data.users); setMessage("Changes saved"); };
+  const create = async (event: FormEvent) => { event.preventDefault(); await request("POST", { username, displayName, password, role }); setUsername(""); setDisplayName(""); setPassword(""); setRole("user"); };
+  const reset = async (user: User) => { const next = window.prompt(`Set a new password for ${user.username} (minimum 8 characters):`); if (next) await request("PATCH", { id: user.id, password: next }); };
+  const remove = async (user: User) => { if (window.confirm(`Remove ${user.username}? This account will no longer be able to sign in.`)) await request("DELETE", { id: user.id }); };
+  return <div className="app-shell"><DashboardSidebar active="users" /><main className="main"><header className="topbar"><div className="top-title"><span className="top-product">STC URL intelligence</span><span>Administration</span></div></header><div className="content">
+    <div className="heading-row"><div><span className="page-label">Administration</span><h1>User management</h1><p className="subhead">Create accounts, assign roles, reset passwords, or remove access.</p></div></div>
+    {message && <div className="notice"><strong>{message}</strong></div>}
+    <section className="panel user-create"><div className="panel-head"><div><div className="panel-title">Create user</div><div className="panel-meta">Passwords are securely hashed and cannot be viewed later</div></div></div><form className="user-form" onSubmit={create}><label>Username<input required pattern="[a-zA-Z0-9._-]{3,50}" value={username} onChange={event => setUsername(event.target.value)} /></label><label>Display name<input value={displayName} onChange={event => setDisplayName(event.target.value)} /></label><label>Temporary password<input required type="password" minLength={8} value={password} onChange={event => setPassword(event.target.value)} /></label><label>Role<select value={role} onChange={event => setRole(event.target.value as "admin" | "user")}><option value="user">User</option><option value="admin">Admin</option></select></label><button className="btn primary">Create user</button></form></section>
+    <section className="panel"><div className="panel-head"><div><div className="panel-title">All users</div><div className="panel-meta">{users.length} account{users.length === 1 ? "" : "s"}</div></div></div><div className="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Created</th><th>Actions</th></tr></thead><tbody>{users.map(user => <tr key={user.id}><td><div className="url-primary">{user.displayName}</div><div className="url-secondary mono">{user.username}</div></td><td><select aria-label={`Role for ${user.username}`} value={user.role} onChange={event => void request("PATCH", { id: user.id, role: event.target.value })}><option value="user">User</option><option value="admin">Admin</option></select></td><td>{new Date(user.createdAt).toLocaleDateString("en-GB")}</td><td><div className="row-actions"><button className="mini-btn" onClick={() => reset(user)}>Reset password</button><button className="mini-btn danger" onClick={() => remove(user)}>Remove</button></div></td></tr>)}</tbody></table></div></section>
+  </div></main></div>;
+}

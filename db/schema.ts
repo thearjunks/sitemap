@@ -76,3 +76,23 @@ export const generalMonitoredUrls = sqliteTable("general_monitored_urls", {
   index("idx_general_urls_status").on(table.status),
   index("idx_general_urls_domain").on(table.domain),
 ]);
+
+export const appUsers = sqliteTable("app_users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  username: text("username").notNull().unique(),
+  displayName: text("display_name").notNull().default(""),
+  passwordHash: text("password_hash").notNull(),
+  role: text("role").notNull().default("user"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const appSessions = sqliteTable("app_sessions", {
+  tokenHash: text("token_hash").primaryKey(),
+  userId: integer("user_id").notNull().references(() => appUsers.id, { onDelete: "cascade" }),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  index("idx_app_sessions_user").on(table.userId),
+  index("idx_app_sessions_expiry").on(table.expiresAt),
+]);
