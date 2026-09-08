@@ -23,6 +23,11 @@ const eslintConfig = defineConfig([
   jsxA11y.flatConfigs.recommended,
   next.configs["core-web-vitals"],
   {
+    rules: {
+      // Vinext's client router did not navigate reliably in the deployed app.
+      // Internal document links are intentional until that compatibility issue is resolved.
+      "@next/next/no-html-link-for-pages": "off",
+    },
     languageOptions: {
       globals: {
         ...globals.browser,
