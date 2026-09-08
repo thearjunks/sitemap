@@ -158,7 +158,17 @@ async function collectSitemapUrls(sitemapUrl: string, visited = new Set<string>(
   return locations;
 }
 
-async function importUrls(rawValues: string[], sourceType: string, sourceName: string, group: string, now: string) {
+async function findExistingUrls(urls: string[]) {
+  const existing: string[] = [];
+  for (let start = 0; start < urls.length; start += 100) {
+    const chunk = urls.slice(start, start + 100);
+    const rows = await env.DB.prepare(`SELECT url FROM monitored_urls WHERE url IN (${chunk.map(() => "?").join(",")})`).bind(...chunk).all<{ url: string }>();
+    existing.push(...rows.results.map((row) => row.url));
+  }
+  return existing;
+}
+
+async function importUrls(rawValues: string[], sourceType: string, sourceName: string, group: string, now: string, duplicateAction?: string) {
   const valid = new Map<string, number>();
   const invalid = new Map<string, number>();
   for (const rawValue of rawValues) {
@@ -169,13 +179,25 @@ async function importUrls(rawValues: string[], sourceType: string, sourceName: s
     else valid.set(url, (valid.get(url) || 0) + 1);
   }
   const entries = [...valid.keys()];
+  const existingUrls = await findExistingUrls(entries);
+  if (existingUrls.length && !["replace", "skip"].includes(String(duplicateAction))) return { requiresDuplicateConfirmation: true as const, duplicateUrls: existingUrls };
+  const existingSet = new Set(existingUrls);
   const addedUrls: string[] = [];
-  const existingUrls: string[] = [];
+  const replacedUrls: string[] = [];
+  if (duplicateAction === "replace") {
+    const update = env.DB.prepare("UPDATE monitored_urls SET group_name=?,status=CASE WHEN status='Removed' THEN 'Unknown' ELSE status END,removed_at=NULL,removed_by=NULL,removal_reason=NULL,status_before_removal=NULL,updated_at=? WHERE url=?");
+    for (let start = 0; start < existingUrls.length; start += 100) {
+      const chunk = existingUrls.slice(start, start + 100);
+      await env.DB.batch(chunk.map((url) => update.bind(group || stcGroup(url), now, url)));
+      replacedUrls.push(...chunk);
+    }
+  }
   const insert = env.DB.prepare("INSERT OR IGNORE INTO monitored_urls (url,label,group_name,status,indexed_status,created_at,updated_at) VALUES (?,'',?,'Unknown','Unknown',?,?)");
-  for (let start = 0; start < entries.length; start += 100) {
-    const chunk = entries.slice(start, start + 100);
+  const newEntries = entries.filter((url) => !existingSet.has(url));
+  for (let start = 0; start < newEntries.length; start += 100) {
+    const chunk = newEntries.slice(start, start + 100);
     const results = await env.DB.batch(chunk.map((url) => insert.bind(url, group || stcGroup(url), now, now)));
-    results.forEach((result, index) => (result.meta.changes ? addedUrls : existingUrls).push(chunk[index]));
+    results.forEach((result, index) => { if (result.meta.changes) addedUrls.push(chunk[index]); });
   }
   for (let start = 0; start < addedUrls.length; start += 100) {
     const chunk = addedUrls.slice(start, start + 100);
@@ -189,14 +211,14 @@ async function importUrls(rawValues: string[], sourceType: string, sourceName: s
   const importId = Number(summary.meta.last_row_id);
   const items = [
     ...addedUrls.map((url) => ({ url, result: "Added", duplicateCount: (valid.get(url) || 1) - 1 })),
-    ...existingUrls.map((url) => ({ url, result: "Existing", duplicateCount: (valid.get(url) || 1) - 1 })),
+    ...existingUrls.map((url) => ({ url, result: replacedUrls.includes(url) ? "Replaced" : "Existing", duplicateCount: (valid.get(url) || 1) - 1 })),
     ...invalidUrls.map((url) => ({ url, result: "Invalid", duplicateCount: (invalid.get(url) || 1) - 1 })),
   ];
   const insertItem = env.DB.prepare("INSERT OR IGNORE INTO url_import_items (import_id,url,result,duplicate_count) VALUES (?,?,?,?)");
   for (let start = 0; start < items.length; start += 100) {
     await env.DB.batch(items.slice(start, start + 100).map((item) => insertItem.bind(importId, item.url, item.result, item.duplicateCount)));
   }
-  return { importId, sourceType, sourceName, importedAt: now, totalRows: rawValues.length, uniqueUrls: entries.length, addedUrls, existingUrls, duplicateUrls, invalidUrls };
+  return { importId, sourceType, sourceName, importedAt: now, totalRows: rawValues.length, uniqueUrls: entries.length, addedUrls, existingUrls, replacedUrls, duplicateUrls, invalidUrls };
 }
 
 async function getPayload() {
@@ -228,7 +250,8 @@ export async function POST(request: Request) {
     const sourceType = ["Excel", "Paste"].includes(String(body.sourceType)) ? String(body.sourceType) : "Paste";
     const values = Array.isArray(body.urls) ? body.urls.map(String) : [];
     if (!values.length) return Response.json({ error: "No URLs found in the import" }, { status: 400 });
-    const result = await importUrls(values, sourceType, String(body.sourceName || sourceType), String(body.group || ""), now);
+    const result = await importUrls(values, sourceType, String(body.sourceName || sourceType), String(body.group || ""), now, String(body.duplicateAction || ""));
+    if ("requiresDuplicateConfirmation" in result) return Response.json({ error: "These URLs already exist. Please confirm whether you want to replace them or skip these URLs.", ...result }, { status: 409 });
     return Response.json({ ...(await getPayload()), importResult: result });
   }
 
@@ -237,7 +260,8 @@ export async function POST(request: Request) {
       const sitemapUrl = String(body.sitemapUrl || "").trim();
       const values = await collectSitemapUrls(sitemapUrl);
       if (!values.length) return Response.json({ error: "No URLs were found in this sitemap" }, { status: 400 });
-      const result = await importUrls(values, "Sitemap", sitemapUrl, String(body.group || ""), now);
+      const result = await importUrls(values, "Sitemap", sitemapUrl, String(body.group || ""), now, String(body.duplicateAction || ""));
+      if ("requiresDuplicateConfirmation" in result) return Response.json({ error: "These URLs already exist. Please confirm whether you want to replace them or skip these URLs.", ...result }, { status: 409 });
       return Response.json({ ...(await getPayload()), importResult: result });
     } catch (error) {
       return Response.json({ error: error instanceof Error ? error.message : "Sitemap import failed" }, { status: 400 });
@@ -246,15 +270,32 @@ export async function POST(request: Request) {
 
   if (action === "add") {
     const entries = Array.isArray(body.urls) ? body.urls : [];
-    let added = 0;
+    const normalized = new Map<string, Record<string, unknown>>();
     for (const item of entries) {
       const data = typeof item === "string" ? { url: item } : item as Record<string, unknown>;
       const url = normalizeUrl(String(data.url || ""));
-      if (!url || !isStcUrl(url)) continue;
+      if (url && isStcUrl(url)) normalized.set(url, data);
+    }
+    const existingUrls = await findExistingUrls([...normalized.keys()]);
+    const duplicateAction = String(body.duplicateAction || "");
+    if (existingUrls.length && !["replace", "skip"].includes(duplicateAction)) return Response.json({ error: "These URLs already exist. Please confirm whether you want to replace them or skip these URLs.", requiresDuplicateConfirmation: true, duplicateUrls: existingUrls }, { status: 409 });
+    const existingSet = new Set(existingUrls);
+    let added = 0;
+    let replaced = 0;
+    for (const [url, data] of normalized) {
+      if (existingSet.has(url) && duplicateAction === "skip") continue;
       const status = ["Live", "Redirected", "404", "410", "Server Error", "Unavailable", "Unknown"].includes(String(data.status)) ? String(data.status) : "Unknown";
       const httpCode = Number.isInteger(data.httpCode) ? Number(data.httpCode) : null;
       const finalUrl = data.finalUrl ? String(data.finalUrl) : null;
       const lastCheckedAt = data.lastCheckedAt ? String(data.lastCheckedAt) : null;
+      if (existingSet.has(url)) {
+        const previous = await env.DB.prepare("SELECT id,status FROM monitored_urls WHERE url=?").bind(url).first<{ id: number; status: string }>();
+        await env.DB.prepare("UPDATE monitored_urls SET label=?,group_name=?,status=?,http_code=?,final_url=?,indexed_status='Unknown',google_first_seen=NULL,last_checked_at=?,alert_message=NULL,removed_at=NULL,removed_by=NULL,removal_reason=NULL,status_before_removal=NULL,updated_at=? WHERE url=?")
+          .bind(String(data.label || ""), String(data.group || stcGroup(url)), status, httpCode, finalUrl, lastCheckedAt, now, url).run();
+        if (previous) await env.DB.prepare("INSERT INTO status_history (url_id,from_status,to_status,http_code,final_url,note,checked_at) VALUES (?,?,?,?,?,'Replaced after duplicate confirmation',?)").bind(previous.id, previous.status, status, httpCode, finalUrl, now).run();
+        replaced++;
+        continue;
+      }
       const result = await env.DB.prepare(
         "INSERT OR IGNORE INTO monitored_urls (url,label,group_name,status,http_code,final_url,indexed_status,last_checked_at,created_at,updated_at) VALUES (?,?,?,?,?,?,'Unknown',?,?,?)"
       ).bind(url, String(data.label || ""), String(data.group || stcGroup(url)), status, httpCode, finalUrl, lastCheckedAt, now, now).run();
@@ -264,7 +305,7 @@ export async function POST(request: Request) {
         if (row) await env.DB.prepare("INSERT INTO status_history (url_id,from_status,to_status,note,checked_at) VALUES (?,NULL,?,'Added to monitoring',?)").bind(row.id, status, now).run();
       }
     }
-    return Response.json({ ...(await getPayload()), added });
+    return Response.json({ ...(await getPayload()), added, replaced, skipped: duplicateAction === "skip" ? existingUrls.length : 0 });
   }
 
   if (action === "check") {

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { DashboardSidebar } from "../dashboard-sidebar";
+import { DuplicateReviewDialog } from "../duplicate-review-dialog";
 
 type Item = { id: number; url: string; domain: string; status: string; httpCode: number | null; finalUrl: string | null; lastCheckedAt: string | null };
 const statuses = ["All statuses", "Live", "Redirected", "404", "410", "Server Error", "Unavailable", "Not active", "Unknown"];
@@ -20,6 +20,7 @@ export function StatusDashboard() {
   const [checking, setChecking] = useState<{ done: number; total: number } | null>(null);
   const [addingToAll, setAddingToAll] = useState(false);
   const [message, setMessage] = useState("");
+  const [duplicateReview, setDuplicateReview] = useState<{ ids: number[]; urls: string[] } | null>(null);
 
   const load = async () => setUrls((await (await fetch("/api/general-urls")).json()).urls);
   useEffect(() => { queueMicrotask(() => void load()); }, []);
@@ -59,15 +60,17 @@ export function StatusDashboard() {
     const data = await (await fetch("/api/general-urls", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) })).json();
     setUrls(data.urls); setSelected([]); setMessage(ids.length === 1 ? "URL deleted" : "Selected URLs deleted");
   };
-  const addToAllUrls = async (ids: number[]) => {
+  const addToAllUrls = async (ids: number[], duplicateAction?: "replace" | "skip") => {
     const targets = urls.filter((item) => ids.includes(item.id));
     if (!targets.length || addingToAll) return;
     setAddingToAll(true); setMessage("");
     try {
-      const response = await fetch("/api/urls", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", urls: targets }) });
-      const data = await response.json(); if (!response.ok) throw new Error(data.error || "Add failed");
-      const skipped = targets.length - data.added;
-      setSelected([]); setMessage(`${data.added} URL${data.added === 1 ? "" : "s"} added to All URLs${skipped ? ` · ${skipped} already existed or were not STC URLs` : ""}`);
+      const response = await fetch("/api/urls", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", urls: targets, duplicateAction }) });
+      const data = await response.json();
+      if (response.status === 409 && data.requiresDuplicateConfirmation) return setDuplicateReview({ ids, urls: data.duplicateUrls || [] });
+      if (!response.ok) throw new Error(data.error || "Add failed");
+      setDuplicateReview(null); setSelected([]);
+      setMessage(`${data.added} added · ${data.replaced || 0} replaced · ${data.skipped || 0} skipped in All URLs`);
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not add URLs"); }
     finally { setAddingToAll(false); }
   };
@@ -78,7 +81,7 @@ export function StatusDashboard() {
     {checking && <div className="loading-line" />}
     <DashboardSidebar active="status" />
     <main className="main">
-      <header className="topbar"><div className="top-title"><span className="top-product">STC URL intelligence</span><span>URL checking workspace</span></div><div className="top-actions"><Link className="btn" href="/#url-registry">View All URLs</Link></div></header>
+      <header className="topbar"><div className="top-title"><span className="top-product">STC URL intelligence</span><span>URL checking workspace</span></div><div className="top-actions"><a className="btn" href="/#url-registry">View All URLs</a></div></header>
       <div className="content">
     <div className="heading-row"><div><span className="page-label">URL checker</span><h1>Check URLs before monitoring</h1><p className="subhead">Test any domain, review redirects and errors, then move approved URLs into the master registry.</p></div><button className="btn primary" disabled={Boolean(checking)} onClick={() => check()}>{checking ? `Checking ${checking.done} / ${checking.total}` : "⟳ Check all now"}</button></div>
     <section className="panel add-panel"><div><div className="panel-title">Add URLs to the checking queue</div><div className="panel-meta">Paste one URL per line, or separate multiple URLs with commas.</div></div><div className="add-grid"><textarea aria-label="URLs to add" placeholder={'https://example.com/\nhttps://example.com/contact'} value={input} onChange={(event) => setInput(event.target.value)} /><button className="btn primary" onClick={add}>＋ Add to queue</button></div>{message && <div className="status-message" role="status">{message}</div>}</section>
@@ -90,5 +93,6 @@ export function StatusDashboard() {
     </section>
       </div>
     </main>
+    {duplicateReview && <DuplicateReviewDialog urls={duplicateReview.urls} busy={addingToAll} onClose={() => setDuplicateReview(null)} onChoose={(action) => addToAllUrls(duplicateReview.ids, action)} />}
   </div>;
 }

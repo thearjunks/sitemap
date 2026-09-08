@@ -6,6 +6,7 @@ import { categoriesForUrl, URL_CATEGORIES } from "./url-category";
 import { duplicateKey } from "./url-duplicates";
 import { sitemapUrls, sitemapXml } from "./sitemap-generator";
 import { DashboardSidebar } from "./dashboard-sidebar";
+import { DuplicateReviewDialog } from "./duplicate-review-dialog";
 
 type UrlItem = {
   id: number; url: string; label: string; group: string; status: string; httpCode: number | null;
@@ -17,9 +18,9 @@ type UrlItem = {
 type HistoryItem = { id: number; url_id: number; from_status: string | null; to_status: string; note: string | null; checked_at: string };
 type Settings = { schedule?: string; alerts_enabled?: number };
 type ImportHistory = { id: number; sourceType: string; sourceName: string; importedAt: string; totalRows: number; uniqueUrls: number; addedCount: number; existingCount: number; duplicateCount: number; invalidCount: number };
-type ImportResult = { importId: number; sourceType: string; sourceName: string; importedAt: string; totalRows: number; uniqueUrls: number; addedUrls: string[]; existingUrls: string[]; duplicateUrls: string[]; invalidUrls: string[] };
+type ImportResult = { importId: number; sourceType: string; sourceName: string; importedAt: string; totalRows: number; uniqueUrls: number; addedUrls: string[]; existingUrls: string[]; replacedUrls?: string[]; duplicateUrls: string[]; invalidUrls: string[] };
 type Payload = { urls: UrlItem[]; removedUrls: UrlItem[]; history: HistoryItem[]; settings: Settings; imports: ImportHistory[] };
-type ApiResponse = Partial<Payload> & { error?: string; added?: number; importResult?: ImportResult; removed?: number; removedIds?: number[]; removedAt?: string; removedBy?: string; removalReason?: string | null };
+type ApiResponse = Partial<Payload> & { error?: string; added?: number; replaced?: number; skipped?: number; importResult?: ImportResult; removed?: number; removedIds?: number[]; removedAt?: string; removedBy?: string; removalReason?: string | null; requiresDuplicateConfirmation?: boolean; duplicateUrls?: string[] };
 
 const statusClass: Record<string, string> = {
   Live: "live", Redirected: "redirected", "404": "not-found", "410": "gone",
@@ -56,6 +57,7 @@ export function UrlMonitorDashboard() {
   const [removalReason, setRemovalReason] = useState("");
   const [toast, setToast] = useState("");
   const [checking, setChecking] = useState<{ done: number; total: number } | null>(null);
+  const [duplicateReview, setDuplicateReview] = useState<{ body: Record<string, unknown>; kind: "add" | "import"; urls: string[] } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -81,6 +83,7 @@ export function UrlMonitorDashboard() {
       if (!text) throw new Error("The server returned an empty response. Please try again.");
       let payload: ApiResponse;
       try { payload = JSON.parse(text); } catch { throw new Error("The server response was incomplete. Please try again."); }
+      if (response.status === 409 && payload.requiresDuplicateConfirmation) return payload;
       if (!response.ok) throw new Error(payload.error || "Request failed");
       if (Array.isArray(payload.urls)) setData({ ...(payload as Payload), imports: payload.imports || [] });
       return payload;
@@ -124,24 +127,32 @@ export function UrlMonitorDashboard() {
 
   const addOne = async () => {
     if (!urlInput.trim()) return;
-    const result = await request("POST", { action: "add", urls: [{ url: urlInput, label: labelInput, group: groupInput }] });
-    if (result) { setDrawer(null); setUrlInput(""); setLabelInput(""); flash("URL added to monitoring"); }
+    const body = { action: "add", urls: [{ url: urlInput, label: labelInput, group: groupInput }] };
+    const result = await request("POST", body);
+    if (result?.requiresDuplicateConfirmation) return setDuplicateReview({ body, kind: "add", urls: result.duplicateUrls || [] });
+    if (result) finishAdd(result);
   };
-  const runImport = async (body: object) => {
+  const finishAdd = (result: ApiResponse) => {
+    setDrawer(null); setUrlInput(""); setLabelInput("");
+    flash(result.replaced ? `${result.replaced} existing URL replaced` : result.skipped ? "Existing URL kept; duplicate skipped" : "URL added to monitoring");
+  };
+  const runImport = async (body: Record<string, unknown>) => {
     setImporting(true);
     try {
       const result = await request("POST", body);
+      if (result?.requiresDuplicateConfirmation) { setDuplicateReview({ body, kind: "import", urls: result.duplicateUrls || [] }); return false; }
       if (result?.importResult) {
         setImportResult(result.importResult);
-        flash(`${result.importResult.addedUrls.length} new URL${result.importResult.addedUrls.length === 1 ? "" : "s"} added`);
+        const replaced = result.importResult.replacedUrls?.length || 0;
+        flash(`${result.importResult.addedUrls.length} new · ${replaced} replaced · ${result.importResult.existingUrls.length - replaced} skipped`);
       }
+      return Boolean(result);
     } finally { setImporting(false); }
   };
   const addBulk = async () => {
     const urls = bulkInput.split(/[\n,;]+/).map((value) => value.trim()).filter(Boolean);
     if (!urls.length) return;
-    await runImport({ action: "import", sourceType: "Paste", sourceName: "Pasted URLs", urls, group: importGroup });
-    setBulkInput("");
+    if (await runImport({ action: "import", sourceType: "Paste", sourceName: "Pasted URLs", urls, group: importGroup })) setBulkInput("");
   };
   const importExcel = async (file: File) => {
     try {
@@ -162,6 +173,23 @@ export function UrlMonitorDashboard() {
   const importSitemap = async () => {
     if (!sitemapInput.trim()) return;
     await runImport({ action: "import-sitemap", sitemapUrl: sitemapInput, group: importGroup });
+  };
+  const resolveDuplicates = async (duplicateAction: "replace" | "skip") => {
+    if (!duplicateReview) return;
+    setImporting(true);
+    try {
+      const pending = duplicateReview;
+      const result = await request("POST", { ...pending.body, duplicateAction });
+      if (!result) return;
+      setDuplicateReview(null);
+      if (pending.kind === "add") finishAdd(result);
+      else if (result.importResult) {
+        setImportResult(result.importResult);
+        if (pending.body.sourceType === "Paste") setBulkInput("");
+        const replaced = result.importResult.replacedUrls?.length || 0;
+        flash(duplicateAction === "replace" ? `${replaced} existing URL${replaced === 1 ? "" : "s"} replaced` : `${result.importResult.addedUrls.length} new URL${result.importResult.addedUrls.length === 1 ? "" : "s"} added; duplicates skipped`);
+      }
+    } finally { setImporting(false); }
   };
   const checkNow = async (ids: number[] = []) => {
     if (checking) return;
@@ -274,8 +302,8 @@ export function UrlMonitorDashboard() {
         {drawer === "bulk" && <>
           <div className="field"><label htmlFor="import-group">Group override (optional)</label><input id="import-group" value={importGroup} onChange={(e) => setImportGroup(e.target.value)} placeholder="Leave blank to detect English or Arabic" /><div className="field-help">When blank, /en/ is classified as English and /ar/ as Arabic automatically.</div></div>
           <div className="import-source"><strong>Excel file</strong><span>Upload an .xlsx file with a URL, Website URL, Page URL, or Link column.</span><label className={`btn ${importing ? "disabled" : ""}`}>Choose Excel<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={importing} onChange={(e) => { const file = e.target.files?.[0]; if (file) void importExcel(file); e.currentTarget.value = ""; }} /></label></div>
-          <div className="import-source"><strong>Sitemap URL</strong><span>Fetch the sitemap and any linked sitemap indexes automatically.</span><input value={sitemapInput} onChange={(e) => setSitemapInput(e.target.value)} placeholder="https://www.stc.com.kw/sitemap.xml" /><button className="btn" disabled={importing} onClick={importSitemap}>Import sitemap</button></div>
-          <div className="field"><label htmlFor="bulk-urls">Or paste STC URLs</label><textarea id="bulk-urls" placeholder={'https://www.stc.com.kw/en/page-one\nhttps://www.stc.com.kw/ar/page-two'} value={bulkInput} onChange={(e) => setBulkInput(e.target.value)} /><div className="field-help">One URL per line, or separate using commas. Duplicate and existing URLs are reported but never added again.</div></div>
+          <div className="import-source"><strong>Sitemap URL</strong><span>Fetch the sitemap and any linked sitemap indexes automatically. Existing URLs are shown for Replace or Skip confirmation before import.</span><input value={sitemapInput} onChange={(e) => setSitemapInput(e.target.value)} placeholder="https://www.stc.com.kw/sitemap.xml" /><button className="btn" disabled={importing} onClick={importSitemap}>Import sitemap</button></div>
+          <div className="field"><label htmlFor="bulk-urls">Or paste STC URLs</label><textarea id="bulk-urls" placeholder={'https://www.stc.com.kw/en/page-one\nhttps://www.stc.com.kw/ar/page-two'} value={bulkInput} onChange={(e) => setBulkInput(e.target.value)} /><div className="field-help">One URL per line, or separate using commas. Existing URLs are reviewed before anything is changed.</div></div>
           <div className="drawer-actions"><button className="btn" onClick={() => setDrawer(null)}>Close</button><button className="btn primary" disabled={importing || !bulkInput.trim()} onClick={addBulk}>{importing ? "Importing…" : "Import pasted URLs"}</button></div>
           {importResult && <ImportResultPanel result={importResult} />}
         </>}
@@ -286,6 +314,7 @@ export function UrlMonitorDashboard() {
         {drawer === "remove" && <><div className="field"><label htmlFor="removed-by">Removed by</label><input id="removed-by" value={removedBy} onChange={(e) => setRemovedBy(e.target.value)} placeholder="Name or team" /></div><div className="field"><label htmlFor="removal-reason">Reason (optional)</label><textarea id="removal-reason" value={removalReason} onChange={(e) => setRemovalReason(e.target.value)} placeholder="Why are these URLs being removed?" /></div><div className="drawer-actions"><button className="btn" onClick={() => setDrawer(null)}>Cancel</button><button className="btn danger" onClick={removeUrls}>Move to Removed URLs</button></div></>}
         {drawer === "settings" && <SettingsPanel settings={data.settings} onSave={async (settings) => { const result = await request("POST", { action: "settings", ...settings }); if (result) { setDrawer(null); flash("Monitoring settings saved"); } }} />}
       </aside></div>}
+      {duplicateReview && <DuplicateReviewDialog urls={duplicateReview.urls} busy={importing} onClose={() => setDuplicateReview(null)} onChoose={resolveDuplicates} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
@@ -299,7 +328,8 @@ function SitemapPanel({ urls, category, onCategory, onGenerate }: { urls: UrlIte
 }
 
 function ImportResultPanel({ result }: { result: ImportResult }) {
-  const groups: Array<[string, string[]]> = [["Newly added", result.addedUrls], ["Existing", result.existingUrls], ["Duplicate in import", result.duplicateUrls], ["Invalid or non-STC", result.invalidUrls]];
+  const replaced = new Set(result.replacedUrls || []);
+  const groups: Array<[string, string[]]> = [["Newly added", result.addedUrls], ["Replaced", result.replacedUrls || []], ["Skipped existing", result.existingUrls.filter((url) => !replaced.has(url))], ["Duplicate in import", result.duplicateUrls], ["Invalid or non-STC", result.invalidUrls]];
   return <div className="import-result"><h3>Import result</h3><div className="import-result-grid">{groups.map(([label, urls]) => <div className="import-stat" key={label}><strong>{urls.length}</strong><span>{label}</span></div>)}</div>{groups.map(([label, urls]) => urls.length > 0 && <details className="import-details" key={label}><summary>{label} ({urls.length})</summary><div className="import-url-list">{urls.map((url) => <div className="mono" key={url}>{url}</div>)}</div></details>)}</div>;
 }
 
