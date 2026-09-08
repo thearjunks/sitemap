@@ -1,3 +1,5 @@
+export const isSoft404 = (html: string) => /<title[^>]*>[^<]*(?:\b404\b|page\s+not\s+found)[^<]*<\/title>/i.test(html);
+
 export async function inspectUrl(rawUrl: string) {
   let current = rawUrl;
   let redirected = false;
@@ -11,7 +13,8 @@ export async function inspectUrl(rawUrl: string) {
       redirected = true;
       current = new URL(location, current).toString();
     }
-    const httpCode = response?.status ?? null;
+    let httpCode = response?.status ?? null;
+    if (response && httpCode >= 200 && httpCode < 300 && response.headers.get("content-type")?.includes("text/html") && isSoft404(await response.text())) httpCode = 404;
     let status = "Unavailable";
     if (httpCode === 404) status = "404";
     else if (httpCode === 410) status = "410";

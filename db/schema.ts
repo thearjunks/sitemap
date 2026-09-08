@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const monitoredUrls = sqliteTable("monitored_urls", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -12,6 +12,10 @@ export const monitoredUrls = sqliteTable("monitored_urls", {
   googleFirstSeen: text("google_first_seen"),
   lastCheckedAt: text("last_checked_at"),
   alertMessage: text("alert_message"),
+  removedAt: text("removed_at"),
+  removedBy: text("removed_by"),
+  removalReason: text("removal_reason"),
+  statusBeforeRemoval: text("status_before_removal"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 }, (table) => [
@@ -36,6 +40,27 @@ export const monitorSettings = sqliteTable("monitor_settings", {
   alertsEnabled: integer("alerts_enabled", { mode: "boolean" }).notNull().default(true),
   updatedAt: text("updated_at").notNull(),
 });
+
+export const urlImports = sqliteTable("url_imports", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sourceType: text("source_type").notNull(),
+  sourceName: text("source_name").notNull(),
+  importedAt: text("imported_at").notNull(),
+  totalRows: integer("total_rows").notNull(),
+  uniqueUrls: integer("unique_urls").notNull(),
+  addedCount: integer("added_count").notNull(),
+  existingCount: integer("existing_count").notNull(),
+  duplicateCount: integer("duplicate_count").notNull(),
+  invalidCount: integer("invalid_count").notNull(),
+}, (table) => [index("idx_url_imports_imported_at").on(table.importedAt)]);
+
+export const urlImportItems = sqliteTable("url_import_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  importId: integer("import_id").notNull().references(() => urlImports.id, { onDelete: "cascade" }),
+  url: text("url").notNull(),
+  result: text("result").notNull(),
+  duplicateCount: integer("duplicate_count").notNull().default(0),
+}, (table) => [uniqueIndex("idx_url_import_items_import_url").on(table.importId, table.url)]);
 
 export const generalMonitoredUrls = sqliteTable("general_monitored_urls", {
   id: integer("id").primaryKey({ autoIncrement: true }),
