@@ -81,7 +81,7 @@ export function StatusDashboard() {
     {checking && <div className="loading-line" />}
     <DashboardSidebar active="status" />
     <main className="main">
-      <header className="topbar"><div className="top-title"><span className="top-product">STC URL intelligence</span><span>URL checking workspace</span></div><div className="top-actions"><a className="btn" href="/#url-registry">View All URLs</a></div></header>
+      <header className="topbar"><div className="top-title"><span className="top-product">STC URL intelligence</span><span>URL checking workspace</span></div><div className="top-actions"><a className="btn" href="/all-urls">View All URLs</a></div></header>
       <div className="content">
     <div className="heading-row"><div><span className="page-label">URL checker</span><h1>Check URLs before monitoring</h1><p className="subhead">Test any domain, review redirects and errors, then move approved URLs into the master registry.</p></div><button className="btn primary" disabled={Boolean(checking)} onClick={() => check()}>{checking ? `Checking ${checking.done} / ${checking.total}` : "⟳ Check all now"}</button></div>
     <section className="panel add-panel"><div><div className="panel-title">Add URLs to the checking queue</div><div className="panel-meta">Paste one URL per line, or separate multiple URLs with commas.</div></div><div className="add-grid"><textarea aria-label="URLs to add" placeholder={'https://example.com/\nhttps://example.com/contact'} value={input} onChange={(event) => setInput(event.target.value)} /><button className="btn primary" onClick={add}>＋ Add to queue</button></div>{message && <div className="status-message" role="status">{message}</div>}</section>

@@ -1,4 +1,4 @@
-import { changePassword, changeRole, createUser, currentUser, deleteUser, listUsers } from "../../auth";
+import { changePassword, changeRole, createUser, currentUser, deleteUser, isSuperAdminUser, listUsers } from "../../auth";
 
 async function admin(request: Request) {
   const user = await currentUser(request);
@@ -26,6 +26,7 @@ export async function PATCH(request: Request) {
   const body = await request.json() as { id?: number; password?: string; role?: string };
   const id = Number(body.id);
   if (!id) return Response.json({ error: "Select a user" }, { status: 400 });
+  if (await isSuperAdminUser(id) && id !== actor.id) return Response.json({ error: "The Super Admin account can only be changed by its owner" }, { status: 403 });
   if (body.password) {
     if (body.password.length < 8) return Response.json({ error: "Password must contain at least 8 characters" }, { status: 400 });
     await changePassword(id, body.password);
@@ -41,6 +42,7 @@ export async function DELETE(request: Request) {
   if (!actor) return Response.json({ error: "Administrator access required" }, { status: 403 });
   const id = Number((await request.json() as { id?: number }).id);
   if (!id || id === actor.id) return Response.json({ error: "You cannot remove your own account" }, { status: 400 });
+  if (await isSuperAdminUser(id)) return Response.json({ error: "The Super Admin account cannot be removed" }, { status: 403 });
   await deleteUser(id);
   return Response.json({ users: await listUsers() });
 }

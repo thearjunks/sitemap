@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import readXlsxFile from "read-excel-file/browser";
 import { categoriesForUrl, URL_CATEGORIES } from "./url-category";
 import { duplicateKey } from "./url-duplicates";
-import { sitemapUrls, sitemapXml } from "./sitemap-generator";
+import { sitemapFiles, sitemapUrls } from "./sitemap-generator";
 import { DashboardSidebar } from "./dashboard-sidebar";
 import { DuplicateReviewDialog } from "./duplicate-review-dialog";
 
@@ -33,7 +33,7 @@ const download = (name: string, content: string, type: string) => {
   const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([content], { type })); link.download = name; link.click(); URL.revokeObjectURL(link.href);
 };
 
-export function UrlMonitorDashboard() {
+export function UrlMonitorDashboard({ view = "overview" }: { view?: "overview" | "urls" }) {
   const [data, setData] = useState<Payload>({ urls: [], removedUrls: [], history: [], settings: {}, imports: [] });
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
@@ -130,11 +130,12 @@ export function UrlMonitorDashboard() {
     const body = { action: "add", urls: [{ url: urlInput, label: labelInput, group: groupInput }] };
     const result = await request("POST", body);
     if (result?.requiresDuplicateConfirmation) return setDuplicateReview({ body, kind: "add", urls: result.duplicateUrls || [] });
-    if (result) finishAdd(result);
+    if (result) await finishAdd(result, urlInput);
   };
-  const finishAdd = (result: ApiResponse) => {
+  const finishAdd = async (result: ApiResponse, submittedUrl: string) => {
     setDrawer(null); setUrlInput(""); setLabelInput("");
-    flash(result.replaced ? `${result.replaced} existing URL replaced` : result.skipped ? "Existing URL kept; duplicate skipped" : "URL added to monitoring");
+    if (result.skipped) return flash("Existing URL kept; duplicate skipped");
+    await autoCheckResult(result, [submittedUrl], result.replaced ? "Existing URL replaced and checked" : "URL added and checked");
   };
   const runImport = async (body: Record<string, unknown>) => {
     setImporting(true);
@@ -144,7 +145,9 @@ export function UrlMonitorDashboard() {
       if (result?.importResult) {
         setImportResult(result.importResult);
         const replaced = result.importResult.replacedUrls?.length || 0;
-        flash(`${result.importResult.addedUrls.length} new · ${replaced} replaced · ${result.importResult.existingUrls.length - replaced} skipped`);
+        const processed = [...result.importResult.addedUrls, ...(result.importResult.replacedUrls || [])];
+        if (processed.length) await autoCheckResult(result, processed, `${result.importResult.addedUrls.length} added · ${replaced} replaced · status check complete`);
+        else flash(`0 added · 0 replaced · ${result.importResult.existingUrls.length} skipped`);
       }
       return Boolean(result);
     } finally { setImporting(false); }
@@ -182,16 +185,22 @@ export function UrlMonitorDashboard() {
       const result = await request("POST", { ...pending.body, duplicateAction });
       if (!result) return;
       setDuplicateReview(null);
-      if (pending.kind === "add") finishAdd(result);
+      if (pending.kind === "add") {
+        const submitted = Array.isArray(pending.body.urls) ? pending.body.urls[0] : null;
+        const submittedUrl = typeof submitted === "string" ? submitted : String((submitted as Record<string, unknown> | null)?.url || "");
+        await finishAdd(result, submittedUrl);
+      }
       else if (result.importResult) {
         setImportResult(result.importResult);
         if (pending.body.sourceType === "Paste") setBulkInput("");
         const replaced = result.importResult.replacedUrls?.length || 0;
-        flash(duplicateAction === "replace" ? `${replaced} existing URL${replaced === 1 ? "" : "s"} replaced` : `${result.importResult.addedUrls.length} new URL${result.importResult.addedUrls.length === 1 ? "" : "s"} added; duplicates skipped`);
+        const processed = [...result.importResult.addedUrls, ...(result.importResult.replacedUrls || [])];
+        if (processed.length) await autoCheckResult(result, processed, `${result.importResult.addedUrls.length} added · ${replaced} replaced · status check complete`);
+        else flash("Existing URLs kept; duplicates skipped");
       }
     } finally { setImporting(false); }
   };
-  const checkNow = async (ids: number[] = []) => {
+  const checkNow = async (ids: number[] = [], successMessage?: string) => {
     if (checking) return;
     const targetIds = ids.length ? ids : data.urls.map((item) => item.id);
     if (!targetIds.length) return flash("No active URLs to check");
@@ -210,10 +219,17 @@ export function UrlMonitorDashboard() {
       setSelected([]);
       const refreshed = await fetch("/api/urls");
       setData(await refreshed.json());
-      flash(`${done} URLs checked`);
+      flash(successMessage || `${done} URLs checked`);
     } catch (error) {
       flash(`${done} of ${targetIds.length} checked. ${error instanceof Error ? error.message : "Checking stopped"}`);
     } finally { setChecking(null); }
+  };
+  const autoCheckResult = async (result: ApiResponse, urls: string[], successMessage: string) => {
+    const keys = new Set(urls.filter(Boolean).map(duplicateKey));
+    const records = Array.isArray(result.urls) ? result.urls : data.urls;
+    const ids = records.filter((item) => keys.has(duplicateKey(item.url))).map((item) => item.id);
+    if (!ids.length) return flash("URLs were saved, but no records were available for the automatic check");
+    await checkNow(ids, successMessage);
   };
   const saveEdit = async () => {
     if (!active) return;
@@ -242,7 +258,9 @@ export function UrlMonitorDashboard() {
     const urls = sitemapUrls(data.urls, sitemapCategory);
     if (!urls.length) return flash(`No Live ${sitemapCategory === "All categories" ? "" : `${sitemapCategory} `}URLs are eligible for the sitemap`);
     const suffix = sitemapCategory === "All categories" ? "" : `-${sitemapCategory.toLowerCase().replaceAll(" ", "-")}`;
-    download(`sitemap${suffix}.xml`, sitemapXml(urls), "application/xml"); flash(`Sitemap created with ${urls.length} SEO-eligible URLs`);
+    const files = sitemapFiles(urls, suffix);
+    files.forEach((file, index) => window.setTimeout(() => download(file.name, file.content, "application/xml"), index * 150));
+    flash(files.length === 1 ? `Sitemap created with ${urls.length} SEO-eligible URLs` : `${files.length - 1} sitemap parts and an index were created for ${urls.length} URLs`);
   };
   const openSitemap = () => { setSitemapCategory(URL_CATEGORIES.some((item) => item === category) ? category : "All categories"); setDrawer("sitemap"); };
   const toggleAll = () => setSelected(selected.length === filtered.length ? [] : filtered.map((item) => item.id));
@@ -254,24 +272,20 @@ export function UrlMonitorDashboard() {
   return (
     <div className="app-shell">
       {(loading || checking) && <div className="loading-line" />}
-      <DashboardSidebar active="overview" schedule={data.settings.schedule} />
+      <DashboardSidebar active={view === "urls" ? "urls" : "overview"} schedule={data.settings.schedule} />
 
       <main className="main">
-        <header className="topbar"><div className="top-title"><span className="top-product">STC URL intelligence</span><span>Website monitoring workspace</span></div><div className="top-actions"><span className="sync-state"><span className="pulse-dot" />Data loaded</span><button className="icon-btn" aria-label="Refresh dashboard" title="Refresh dashboard" onClick={load}>⟳</button></div></header>
+        <header className="topbar"><div className="top-title"><span className="top-product">STC URL intelligence</span><span>{view === "urls" ? "Master URL registry" : "Website monitoring overview"}</span></div><div className="top-actions"><span className="sync-state"><span className="pulse-dot" />Data loaded</span><button className="icon-btn" aria-label="Refresh dashboard" title="Refresh dashboard" onClick={load}>⟳</button></div></header>
         <div className="content">
           <div className="heading-row">
-            <div><span className="page-label">Overview</span><h1>Keep every STC URL healthy</h1><p className="subhead">Monitor availability, redirects, indexing, and sitemap eligibility from one organized workspace.</p></div>
-            <div className="button-row"><button className="btn" disabled={Boolean(checking)} onClick={() => { setImportResult(null); setDrawer("bulk"); }}>⇧ Bulk import</button><button className="btn" onClick={() => setDrawer("imports")}>↺ Import history</button><button className="btn" disabled={Boolean(checking)} onClick={() => checkNow()}>{checking ? `⟳ Checking ${checking.done.toLocaleString()} / ${checking.total.toLocaleString()}` : "⟳ Check all now"}</button><button className="btn primary" disabled={Boolean(checking)} onClick={() => setDrawer("add")}>＋ Add URL</button></div>
+            {view === "overview" ? <><div><span className="page-label">Overview</span><h1>Keep every STC URL healthy</h1><p className="subhead">Monitor availability, redirects, indexing, and sitemap eligibility from one focused summary.</p></div><div className="button-row"><a className="btn" href="/all-urls">⌁ Open All URLs</a><button className="btn" disabled={Boolean(checking)} onClick={() => checkNow()}>{checking ? `⟳ Checking ${checking.done.toLocaleString()} / ${checking.total.toLocaleString()}` : "⟳ Check all now"}</button><a className="btn primary" href="/all-urls?panel=sitemap">◇ Generate sitemap</a></div></> : <><div><span className="page-label">Master registry</span><h1>All URLs</h1><p className="subhead">Add, validate, check, filter, and export every URL used to build the STC sitemap.</p></div><div className="button-row"><button className="btn" onClick={() => { setImportResult(null); setDrawer("bulk"); }}>⇧ Excel or sitemap import</button><button className="btn" onClick={() => setDrawer("imports")}>↺ Import history</button><button className="btn" disabled={Boolean(checking)} onClick={() => checkNow()}>{checking ? `⟳ Checking ${checking.done.toLocaleString()} / ${checking.total.toLocaleString()}` : "⟳ Check all now"}</button><button className="btn primary" onClick={openSitemap}>◇ Generate sitemap</button></div></>}
           </div>
 
           {checking && <div className="check-progress" role="status" aria-live="polite"><div className="check-progress-copy"><strong>Checking all URLs…</strong><span>{checking.done.toLocaleString()} of {checking.total.toLocaleString()} checked</span></div><div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={checking.total} aria-valuenow={checking.done}><div className="progress-fill" style={{ width: `${Math.round((checking.done / checking.total) * 100)}%` }} /></div><div className="panel-meta">Keep this page open. Results and filters update after every batch.</div></div>}
 
-          {alerts.length > 0 && <div className="notice"><span><strong>{alerts.length} active alert{alerts.length > 1 ? "s" : ""}</strong> — previously healthy pages have changed status and need review.</span><button onClick={() => { setQuery(""); setStatus("All statuses"); window.scrollTo({ top: 520, behavior: "smooth" }); }}>Review alerts →</button></div>}
-          <section className="metrics" aria-label="URL monitoring summary">
-            {metrics.map((metric) => <button className={`metric ${status === metric.filter ? "metric-active" : ""}`} key={metric.label} style={{ "--accent": metric.accent } as React.CSSProperties} onClick={() => { setStatus(metric.filter); document.getElementById("url-registry")?.scrollIntoView({ behavior: "smooth" }); }}><div className="metric-top"><span>{metric.label}</span><span className="metric-icon">{metric.icon}</span></div><div className="metric-value">{metric.value}</div><div className="metric-note">{metric.note}<span>View →</span></div></button>)}
-          </section>
+          {view === "overview" && <>{alerts.length > 0 && <div className="notice"><span><strong>{alerts.length} active alert{alerts.length > 1 ? "s" : ""}</strong> — previously healthy pages have changed status and need review.</span><a href="/all-urls">Review alerts →</a></div>}<section className="metrics" aria-label="URL monitoring summary">{metrics.map((metric) => <button className="metric" key={metric.label} style={{ "--accent": metric.accent } as React.CSSProperties} onClick={() => { window.location.href = metric.filter === "All statuses" ? "/all-urls" : `/all-urls?status=${encodeURIComponent(metric.filter)}`; }}><div className="metric-top"><span>{metric.label}</span><span className="metric-icon">{metric.icon}</span></div><div className="metric-value">{metric.value}</div><div className="metric-note">{metric.note}<span>Open →</span></div></button>)}</section></>}
 
-          <section className="panel" id="url-registry">
+          {view === "urls" && <><section className="panel add-panel bulk-registry-input" id="bulk-url-input"><div><div className="panel-title">Add URLs or domains</div><div className="panel-meta">Enter one or many STC URLs or domains. Separate entries with a new line, comma, or semicolon.</div></div><div className="add-grid"><textarea aria-label="URLs or domains to add" placeholder={'www.stc.com.kw/en/\nhttps://www.stc.com.kw/ar/\nwww.stc.com.kw/en/contact'} value={bulkInput} onChange={(event) => setBulkInput(event.target.value)} /><button className="btn primary" disabled={importing || Boolean(checking) || !bulkInput.trim()} onClick={addBulk}>{importing || checking ? "Processing…" : "＋ Add"}</button></div><div className="field-help">Duplicates are shown for Replace or Skip confirmation. Successfully added URLs are checked automatically before their status appears below.</div></section><section className="panel" id="url-registry">
             <div className="panel-head"><div><div className="panel-title">Monitored URLs</div><div className="panel-meta">Operational registry with current status and last check</div></div><div className="button-row"><button className="btn" onClick={exportCsv}>↓ Export CSV</button><button className="btn" onClick={openSitemap}>◇ Generate sitemap</button></div></div>
             <div className="toolbar">
               <div className="toolbar-left"><div className="search"><input aria-label="Search URLs" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search URL, label, or destination" /></div><select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)}>{["All statuses","Live","Redirected","Broken","404","410","Server Error","Unavailable","Not active","Indexed","Not Indexed","Unknown"].map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Filter by group" value={group} onChange={(e) => setGroup(e.target.value)}><option>All groups</option>{groups.map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Filter by category" value={category} onChange={(e) => setCategory(e.target.value)}><option>All categories</option>{[...URL_CATEGORIES, "Duplicate links"].map((item) => <option key={item}>{item}</option>)}</select><select aria-label="Sort URLs" value={sort} onChange={(e) => setSort(e.target.value)}>{["Recently updated","URL A–Z","Status","Oldest checked"].map((item) => <option key={item}>{item}</option>)}</select>{(query || status !== "All statuses" || group !== "All groups" || category !== "All categories") && <button className="text-btn" onClick={clearFilters}>Clear filters</button>}</div>
@@ -292,7 +306,7 @@ export function UrlMonitorDashboard() {
               {!filtered.length && <div className="empty"><strong>No URLs match these filters.</strong><br />Try clearing a filter or add a new URL.</div>}
             </div>
             <div className="panel-foot"><span><strong>{filtered.length.toLocaleString()}</strong> of {data.urls.length.toLocaleString()} URLs shown</span><span>Sitemap includes Live URLs only</span></div>
-          </section>
+          </section></>}
         </div>
       </main>
 
@@ -324,7 +338,7 @@ function SitemapPanel({ urls, category, onCategory, onGenerate }: { urls: UrlIte
   const inCategory = urls.filter((item) => category === "All categories" || categoriesForUrl(item.url).includes(category));
   const live = inCategory.filter((item) => item.status === "Live");
   const eligible = sitemapUrls(urls, category);
-  return <><div className="field"><label htmlFor="sitemap-category">Category</label><select id="sitemap-category" value={category} onChange={(event) => onCategory(event.target.value)}><option>All categories</option>{URL_CATEGORIES.map((item) => <option key={item}>{item}</option>)}</select></div><div className="import-result-grid sitemap-summary"><div className="import-stat"><strong>{eligible.length}</strong><span>Included</span></div><div className="import-stat"><strong>{inCategory.length - live.length}</strong><span>Non-live excluded</span></div><div className="import-stat"><strong>{live.length - eligible.length}</strong><span>Duplicate variants excluded</span></div></div><div className="sitemap-rules"><strong>SEO rules applied</strong><ul><li>Only Live URLs from All URLs</li><li>One preferred URL per duplicate set</li><li>Absolute URLs with XML escaping</li><li>No unverified lastmod, priority, or changefreq values</li><li>Removed, redirected, broken, and unavailable URLs excluded</li></ul></div><div className="field-help">Google permits up to 50,000 URLs per sitemap. This export contains {eligible.length.toLocaleString()}.</div><div className="drawer-actions"><button className="btn primary" disabled={!eligible.length || eligible.length > 50000} onClick={onGenerate}>Download XML sitemap</button></div></>;
+  return <><div className="field"><label htmlFor="sitemap-category">Category</label><select id="sitemap-category" value={category} onChange={(event) => onCategory(event.target.value)}><option>All categories</option>{URL_CATEGORIES.map((item) => <option key={item}>{item}</option>)}</select></div><div className="import-result-grid sitemap-summary"><div className="import-stat"><strong>{eligible.length}</strong><span>Included</span></div><div className="import-stat"><strong>{inCategory.length - live.length}</strong><span>Non-live excluded</span></div><div className="import-stat"><strong>{live.length - eligible.length}</strong><span>Duplicate variants excluded</span></div></div><div className="sitemap-rules"><strong>SEO rules applied</strong><ul><li>Only Live records stored in All URLs</li><li>One preferred URL per duplicate set</li><li>Absolute URLs with XML escaping</li><li>No unverified lastmod, priority, or changefreq values</li><li>Removed, redirected, broken, and unavailable URLs excluded</li><li>More than 50,000 URLs automatically creates sitemap parts and a sitemap index</li></ul></div><div className="field-help">This export contains {eligible.length.toLocaleString()} eligible URLs and is ready for the website or SEO team.</div><div className="drawer-actions"><button className="btn primary" disabled={!eligible.length} onClick={onGenerate}>Download SEO sitemap</button></div></>;
 }
 
 function ImportResultPanel({ result }: { result: ImportResult }) {

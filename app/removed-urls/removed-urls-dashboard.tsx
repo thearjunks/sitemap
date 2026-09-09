@@ -40,7 +40,7 @@ export function RemovedUrlsDashboard() {
     {loading && <div className="loading-line" />}
     <DashboardSidebar active="removed" schedule={data.settings?.schedule} />
     <main className="main">
-      <header className="topbar"><div className="top-title"><span className="top-product">STC URL intelligence</span><span>Removal archive</span></div><div className="top-actions"><a className="btn" href="/#url-registry">View All URLs</a><button className="icon-btn" aria-label="Refresh removed URLs" title="Refresh removed URLs" onClick={load}>⟳</button></div></header>
+      <header className="topbar"><div className="top-title"><span className="top-product">STC URL intelligence</span><span>Removal archive</span></div><div className="top-actions"><a className="btn" href="/all-urls">View All URLs</a><button className="icon-btn" aria-label="Refresh removed URLs" title="Refresh removed URLs" onClick={load}>⟳</button></div></header>
       <div className="content">
         <div className="heading-row"><div><span className="page-label">Archive</span><h1>Removed URLs</h1><p className="subhead">Review archived records, see who removed them and why, or restore them to active monitoring.</p></div>{selected.length > 0 && <button className="btn primary" disabled={loading} onClick={() => restore(selected)}>↶ Restore selected ({selected.length})</button>}</div>
         {message && <div className="notice"><span><strong>{message}</strong></span></div>}

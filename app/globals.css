@@ -83,7 +83,7 @@ h1 { font-size: 27px; margin: 0 0 7px; letter-spacing: -.8px; line-height: 1.15;
 
 .notice { background: #fff6e8; border: 1px solid #f0d5ad; color: #7a4c14; border-radius: 8px; padding: 11px 14px; font-size: 12px; margin-bottom: 17px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .notice strong { color: #5a370d; }
-.notice button { border: 0; background: transparent; color: #8e5d1e; font-weight: 800; }
+.notice button, .notice a { border: 0; background: transparent; color: #8e5d1e; font-weight: 800; text-decoration: none; }
 .check-progress { background: white; border: 1px solid #cfe4e1; border-radius: 9px; padding: 15px 17px; margin-bottom: 17px; box-shadow: inset 3px 0 var(--teal); }
 .check-progress-copy { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-bottom: 10px; font-size: 12px; }
 .check-progress-copy span { color: var(--teal-dark); font-weight: 800; }

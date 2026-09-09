@@ -4,12 +4,22 @@ import test from "node:test";
 
 test("dashboard navigation uses reliable document links", async () => {
   const source = await readFile("app/dashboard-sidebar.tsx", "utf8");
-  for (const href of ["/", "/#url-registry", "/status-dashboard", "/?status=Redirected#url-registry", "/?status=404#url-registry", "/duplicates", "/removed-urls", "/?panel=sitemap", "/?panel=settings", "/account", "/admin/users"]) {
+  for (const href of ["/", "/all-urls", "/status-dashboard", "/all-urls?status=Redirected", "/all-urls?status=404", "/duplicates", "/removed-urls", "/all-urls?panel=sitemap", "/all-urls?panel=settings", "/account", "/admin/users"]) {
     assert.ok(source.includes(`"${href}"`), `missing ${href}`);
   }
   assert.match(source, /href=\{href\}/);
   assert.match(source, /aria-current=\{current === section \? "page" : undefined\}/);
   assert.doesNotMatch(source, /next\/link|<Link/);
+});
+
+test("overview and All URLs render as dedicated dashboard modes", async () => {
+  const source = await readFile("app/url-monitor-dashboard.tsx", "utf8");
+  const allUrlsPage = await readFile("app/all-urls/page.tsx", "utf8");
+  assert.match(source, /view === "overview"/);
+  assert.match(source, /view === "urls"/);
+  assert.match(source, /URLs or domains to add/);
+  assert.match(source, /autoCheckResult/);
+  assert.match(allUrlsPage, /view="urls"/);
 });
 
 test("duplicate dashboard supports safe and full duplicate selection", async () => {

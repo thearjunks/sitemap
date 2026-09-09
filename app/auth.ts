@@ -4,11 +4,15 @@ import { hashPassword, verifyPassword } from "../server/passwords.mjs";
 const COOKIE = "url_watch_session";
 const SESSION_DAYS = 7;
 
-export type AppUser = { id: number; username: string; displayName: string; role: "admin" | "user"; createdAt: string; updatedAt: string };
+export type AppUser = { id: number; username: string; displayName: string; role: "admin" | "user"; isSuperAdmin: boolean; createdAt: string; updatedAt: string };
 type UserRow = { id: number; username: string; display_name: string; password_hash: string; role: "admin" | "user"; created_at: string; updated_at: string };
+type AuthConfig = { ADMIN_USERNAME?: string; ADMIN_PASSWORD?: string; ADMIN_DISPLAY_NAME?: string; SUPER_ADMIN_USERNAME?: string };
 
 const bytesToHex = (bytes: Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
-const mapUser = (row: UserRow): AppUser => ({ id: row.id, username: row.username, displayName: row.display_name, role: row.role, createdAt: row.created_at, updatedAt: row.updated_at });
+const authConfig = () => env as unknown as AuthConfig;
+const configuredValue = (key: keyof AuthConfig) => authConfig()[key] || process.env[key];
+const superAdminUsername = () => (configuredValue("SUPER_ADMIN_USERNAME") || configuredValue("ADMIN_USERNAME") || "").trim().toLowerCase();
+const mapUser = (row: UserRow): AppUser => ({ id: row.id, username: row.username, displayName: row.display_name, role: row.role, isSuperAdmin: Boolean(superAdminUsername()) && row.username.toLowerCase() === superAdminUsername(), createdAt: row.created_at, updatedAt: row.updated_at });
 export { verifyPassword };
 
 export async function ensureAuthDb() {
@@ -20,12 +24,12 @@ export async function ensureAuthDb() {
   ]);
   const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM app_users").first<{ count: number }>();
   if (!count?.count) {
-    const username = process.env.ADMIN_USERNAME?.trim();
-    const password = process.env.ADMIN_PASSWORD;
+    const username = configuredValue("ADMIN_USERNAME")?.trim();
+    const password = configuredValue("ADMIN_PASSWORD");
     if (username && password) {
       const now = new Date().toISOString();
       await env.DB.prepare("INSERT OR IGNORE INTO app_users(username,display_name,password_hash,role,created_at,updated_at) VALUES (?,?,?,?,?,?)")
-        .bind(username, username, await hashPassword(password), "admin", now, now).run();
+        .bind(username, configuredValue("ADMIN_DISPLAY_NAME")?.trim() || username, await hashPassword(password), "admin", now, now).run();
     }
   }
   await env.DB.prepare("DELETE FROM app_sessions WHERE expires_at <= ?").bind(new Date().toISOString()).run();
@@ -93,4 +97,9 @@ export async function changeRole(userId: number, role: "admin" | "user") {
 
 export async function deleteUser(userId: number) {
   await env.DB.prepare("DELETE FROM app_users WHERE id=?").bind(userId).run();
+}
+
+export async function isSuperAdminUser(userId: number) {
+  const row = await env.DB.prepare("SELECT username FROM app_users WHERE id=?").bind(userId).first<{ username: string }>();
+  return Boolean(row && superAdminUsername() && row.username.toLowerCase() === superAdminUsername());
 }

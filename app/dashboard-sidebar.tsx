@@ -7,12 +7,19 @@ type Section = "overview" | "urls" | "status" | "redirects" | "broken" | "duplic
 function currentSection(fallback: Section): Section {
   if (typeof window === "undefined") return fallback;
   const { pathname, search, hash } = window.location;
+  const params = new URLSearchParams(search);
   if (pathname === "/status-dashboard") return "status";
+  if (pathname === "/all-urls") {
+    if (params.get("panel") === "sitemap") return "sitemap";
+    if (params.get("panel") === "settings") return "settings";
+    if (params.get("status") === "Redirected") return "redirects";
+    if (["404", "Broken"].includes(params.get("status") || "")) return "broken";
+    return "urls";
+  }
   if (pathname === "/duplicates") return "duplicates";
   if (pathname === "/removed-urls") return "removed";
   if (pathname === "/account") return "account";
   if (pathname === "/admin/users") return "users";
-  const params = new URLSearchParams(search);
   if (params.get("panel") === "sitemap") return "sitemap";
   if (params.get("panel") === "settings") return "settings";
   if (params.get("status") === "Redirected") return "redirects";
@@ -34,10 +41,10 @@ export function DashboardSidebar({ active, schedule = "Every 6 hours" }: { activ
   }, [active]);
   const items = [
     ["overview", "/", "▦", "Overview"],
-    ["urls", "/#url-registry", "⌁", "All URLs"],
+    ["urls", "/all-urls", "⌁", "All URLs"],
     ["status", "/status-dashboard", "◎", "URL Status"],
-    ["redirects", "/?status=Redirected#url-registry", "↗", "Redirects"],
-    ["broken", "/?status=404#url-registry", "!", "Broken pages"],
+    ["redirects", "/all-urls?status=Redirected", "↗", "Redirects"],
+    ["broken", "/all-urls?status=404", "!", "Broken pages"],
     ["duplicates", "/duplicates", "⧉", "Duplicate URLs"],
     ["removed", "/removed-urls", "⌫", "Removed URLs"],
   ] as const;
@@ -53,8 +60,8 @@ export function DashboardSidebar({ active, schedule = "Every 6 hours" }: { activ
     </nav>
     <div className="nav-label">Tools</div>
     <nav aria-label="Management navigation">
-      <a className={`nav-item ${current === "sitemap" ? "active" : ""}`} href="/?panel=sitemap" aria-current={current === "sitemap" ? "page" : undefined}><span className="nav-icon">◇</span><span>Sitemap builder</span></a>
-      <a className={`nav-item ${current === "settings" ? "active" : ""}`} href="/?panel=settings" aria-current={current === "settings" ? "page" : undefined}><span className="nav-icon">⚙</span><span>Settings</span></a>
+      <a className={`nav-item ${current === "sitemap" ? "active" : ""}`} href="/all-urls?panel=sitemap" aria-current={current === "sitemap" ? "page" : undefined}><span className="nav-icon">◇</span><span>Sitemap builder</span></a>
+      <a className={`nav-item ${current === "settings" ? "active" : ""}`} href="/all-urls?panel=settings" aria-current={current === "settings" ? "page" : undefined}><span className="nav-icon">⚙</span><span>Settings</span></a>
     </nav>
     <div className="nav-label">Account</div>
     <nav aria-label="Account navigation">
