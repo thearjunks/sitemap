@@ -18,3 +18,10 @@ test("duplicate dashboard supports safe and full duplicate selection", async () 
   assert.match(source, /Select all duplicates/);
   assert.match(source, /action: "remove"/);
 });
+
+test("duplicate confirmation uses a contained modal layout", async () => {
+  const source = await readFile("app/duplicate-review-dialog.tsx", "utf8");
+  assert.match(source, /duplicate-confirm-body/);
+  assert.match(source, /duplicate-confirm-actions/);
+  assert.doesNotMatch(source, /drawer-head|drawer-actions/);
+});
