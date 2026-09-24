@@ -255,12 +255,12 @@ export function UrlMonitorDashboard({ view = "overview" }: { view?: "overview" |
     download("url-monitoring-export.csv", rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"','""')}"`).join(",")).join("\n"), "text/csv;charset=utf-8"); flash("CSV export created");
   };
   const exportSitemap = () => {
-    const urls = sitemapUrls(data.urls, sitemapCategory);
-    if (!urls.length) return flash(`No Live ${sitemapCategory === "All categories" ? "" : `${sitemapCategory} `}URLs are eligible for the sitemap`);
+    const entries = sitemapUrls(data.urls, sitemapCategory);
+    if (!entries.length) return flash(`No Live ${sitemapCategory === "All categories" ? "" : `${sitemapCategory} `}URLs are eligible for the sitemap`);
     const suffix = sitemapCategory === "All categories" ? "" : `-${sitemapCategory.toLowerCase().replaceAll(" ", "-")}`;
-    const files = sitemapFiles(urls, suffix);
+    const files = sitemapFiles(entries, suffix);
     files.forEach((file, index) => window.setTimeout(() => download(file.name, file.content, "application/xml"), index * 150));
-    flash(files.length === 1 ? `Sitemap created with ${urls.length} SEO-eligible URLs` : `${files.length - 1} sitemap parts and an index were created for ${urls.length} URLs`);
+    flash(files.length === 1 ? `Sitemap created with ${entries.length} SEO-eligible URLs` : `${files.length - 1} sitemap parts and an index were created for ${entries.length} URLs`);
   };
   const openSitemap = () => { setSitemapCategory(URL_CATEGORIES.some((item) => item === category) ? category : "All categories"); setDrawer("sitemap"); };
   const toggleAll = () => setSelected(selected.length === filtered.length ? [] : filtered.map((item) => item.id));
@@ -338,7 +338,7 @@ function SitemapPanel({ urls, category, onCategory, onGenerate }: { urls: UrlIte
   const inCategory = urls.filter((item) => category === "All categories" || categoriesForUrl(item.url).includes(category));
   const live = inCategory.filter((item) => item.status === "Live");
   const eligible = sitemapUrls(urls, category);
-  return <><div className="field"><label htmlFor="sitemap-category">Category</label><select id="sitemap-category" value={category} onChange={(event) => onCategory(event.target.value)}><option>All categories</option>{URL_CATEGORIES.map((item) => <option key={item}>{item}</option>)}</select></div><div className="import-result-grid sitemap-summary"><div className="import-stat"><strong>{eligible.length}</strong><span>Included</span></div><div className="import-stat"><strong>{inCategory.length - live.length}</strong><span>Non-live excluded</span></div><div className="import-stat"><strong>{live.length - eligible.length}</strong><span>Duplicate variants excluded</span></div></div><div className="sitemap-rules"><strong>SEO rules applied</strong><ul><li>Only Live records stored in All URLs</li><li>One preferred URL per duplicate set</li><li>Absolute URLs with XML escaping</li><li>No unverified lastmod, priority, or changefreq values</li><li>Removed, redirected, broken, and unavailable URLs excluded</li><li>More than 50,000 URLs automatically creates sitemap parts and a sitemap index</li></ul></div><div className="field-help">This export contains {eligible.length.toLocaleString()} eligible URLs and is ready for the website or SEO team.</div><div className="drawer-actions"><button className="btn primary" disabled={!eligible.length} onClick={onGenerate}>Download SEO sitemap</button></div></>;
+  return <><div className="field"><label htmlFor="sitemap-category">Category</label><select id="sitemap-category" value={category} onChange={(event) => onCategory(event.target.value)}><option>All categories</option>{URL_CATEGORIES.map((item) => <option key={item}>{item}</option>)}</select></div><div className="import-result-grid sitemap-summary"><div className="import-stat"><strong>{eligible.length}</strong><span>Included</span></div><div className="import-stat"><strong>{inCategory.length - live.length}</strong><span>Non-live excluded</span></div><div className="import-stat"><strong>{live.length - eligible.length}</strong><span>Duplicate variants excluded</span></div></div><div className="sitemap-rules"><strong>SEO rules applied</strong><ul><li>Only Live records stored in All URLs</li><li>One preferred URL per duplicate set</li><li>Absolute URLs with XML escaping</li><li>Every URL includes lastmod, daily changefreq, and priority 0.1</li><li>Removed, redirected, broken, and unavailable URLs excluded</li><li>More than 50,000 URLs automatically creates sitemap parts and a sitemap index</li></ul></div><div className="field-help">This export contains {eligible.length.toLocaleString()} eligible URLs and is ready for the website or SEO team.</div><div className="drawer-actions"><button className="btn primary" disabled={!eligible.length} onClick={onGenerate}>Download SEO sitemap</button></div></>;
 }
 
 function ImportResultPanel({ result }: { result: ImportResult }) {
